@@ -1,0 +1,841 @@
+---
+title: "Data Mining - Group Project"
+output: html_notebook
+---
+
+```{r - libraries}
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(corrplot)
+library(tidymodels)
+library(skimr)
+library(caret)
+library(mice) # imputation of missing values
+library(class)
+library(FNN)
+library(gains)
+library(scales)
+
+```
+
+```{r - Import dataset - OkCupid}
+
+okcupid = read.csv("C:/Users/estiv/OneDrive - FCT NOVA/Ambiente de Trabalho/BA/Business Data Mining/Group Project/profiles okcupid.csv"); okcupid
+
+```
+
+
+```{r - Removing columns that are not useful}
+#removing the columns essay
+okcupid = okcupid[, -(7:15)]; okcupid
+okcupid = okcupid[, -7]; okcupid
+
+#removing the columns speaks
+okcupid = okcupid[, -20]; okcupid
+
+#removing the column last_online
+okcupid = okcupid[, -11]; okcupid
+
+#removing location (they are all in the bay area)
+okcupid = okcupid[, -11]; okcupid
+```
+
+
+```{r - Identify missing and null values}
+
+# Turn every -1 in the column income to NA
+okcupid$income[okcupid$income == -1] = NA; okcupid$income
+
+# Create a character vector of column names
+columns = as.list(colnames(okcupid)); columns
+
+# Create a data frame to store the results
+empty_df = data.frame(column = character(), empty_count = numeric())
+
+# Count empty cells by column
+for (column in columns) {
+  # Calculate the sum of nchar for the current column
+  empty_count = sum(nchar(okcupid[, column]) == 0)
+  
+  # Create a new row for the result data frame
+  new_row = data.frame(column = column, empty_count = empty_count)
+  
+  # Add the new row to the result data frame
+  empty_df = rbind(empty_df, new_row)
+}
+
+empty_df
+
+#turn the NA value to 0 in empty_df
+empty_df[is.na(empty_df)] = 0; empty_df
+
+# join the zeros in income to empty_df
+empty_df = rbind(empty_df, data.frame(column = "income", empty_count = sum(okcupid$income == 0))); empty_df
+
+#barplot of empty_df with ggplot2 and the row names on the x-axis in the color steelblue
+
+empty_df = empty_df[order(-empty_df$empty_count), ]; empty_df
+
+ggplot(empty_df, aes(x = column, y = empty_count)) +
+  geom_bar(stat = "identity") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Number of empty cells by column", x = "Column", y = "Number of empty cells") +
+  geom_col(fill = "magenta")
+
+
+
+```
+
+```{r - Tansforming categorical variables into factors}
+
+# a little extra = 1, average = 2, thin = 3, athletic = 4, fit = 5, curvy = 6, unknown = NA, skinny = 7
+okcupid$body_type = as.factor(ifelse(okcupid$body_type == "a little extra", 1, ifelse(okcupid$body_type == "average", 2, ifelse(okcupid$body_type == "thin", 3, ifelse(okcupid$body_type == "athletic", 4, ifelse(okcupid$body_type == "fit", 5, ifelse(okcupid$body_type == "curvy", 6,ifelse(okcupid$body_type == "skinny", 7, NA))))))))
+
+# anything = 1, vegetarian = 2, vegan = 3, other = NA
+okcupid$diet = as.factor(ifelse(okcupid$diet == "strictly anything", 1, ifelse(okcupid$diet == "mostly other", NA, ifelse(okcupid$diet == "anything", 1, ifelse(okcupid$diet == "vegetarian", 2, ifelse(okcupid$diet == "mostly anything", 1, ifelse(okcupid$diet == "mostly vegetarian", 2, ifelse(okcupid$diet == "strictly vegan", 3, ifelse(okcupid$diet == "vegan", 3, NA)))))))))
+
+# not at all = 1, often = 2, rarely = 3, socially = 4, very often = 5, unknown = NA
+okcupid$drinks = as.factor(ifelse(okcupid$drinks == "not at all", 1, ifelse(okcupid$drinks == "often", 2, ifelse(okcupid$drinks == "rarely", 3, ifelse(okcupid$drinks == "socially", 4, ifelse(okcupid$drinks == "very often", 5, NA))))))
+
+# never = 1, sometimes = 2, often = 3, unknown = NA
+okcupid$drugs = as.factor(ifelse(okcupid$drugs == "never", 1, ifelse(okcupid$drugs == "sometimes", 2, ifelse(okcupid$drugs == "often", 3, NA))))
+
+# high school = 3, college/university = 1, masters = 2, phd = 4, other = NA
+okcupid$education = as.factor(ifelse(okcupid$education == "graduated from college/university", 1, ifelse(okcupid$education == "graduated from masters program", 2, ifelse(okcupid$education == "working on college/university", 1, ifelse(okcupid$education == "working on masters program", 2, ifelse(okcupid$education == "graduated from two-year college", 1, ifelse(okcupid$education == "graduated from high school", 3, ifelse(okcupid$education == "graduated from ph.d program", 4, ifelse(okcupid$education == "graduated from law school", 1, ifelse(okcupid$education == "working on two-year college", 1, ifelse(okcupid$education == "dropped out of college/university", 3, ifelse(okcupid$education == "working on ph.d program", 4, ifelse(okcupid$education == "college/university", 1, ifelse(okcupid$education == "graduated from space camp", NA, ifelse(okcupid$education == "dropped out of space camp", NA, ifelse(okcupid$education == "graduated from med school", 1, ifelse(okcupid$education == "working on space camp", NA, ifelse(okcupid$education == "working on law school", 1, ifelse(okcupid$education == "two-year college", 1, ifelse(okcupid$education == "working on med school", 1, ifelse(okcupid$education == "dropped out of two-year college", 3, ifelse(okcupid$education == "dropped out of masters program", 1, ifelse(okcupid$education == "masters program", 2, ifelse(okcupid$education == "dropped out of ph.d program", 2, ifelse(okcupid$education == "dropped out of high school", NA, ifelse(okcupid$education == "high school", 3, ifelse(okcupid$education == "working on high school", 3, ifelse(okcupid$education == "space camp", NA, ifelse(okcupid$education == "ph.d program", 4, ifelse(okcupid$education == "law school",1, NA))))))))))))))))))))))))))))))
+
+# white = 1, asian = 2, hispanic / latin = 3, black = 4, other = NA, pacific islander = 5, native american = 6, middle eastern = 7, indian = 8, mixed = 9
+okcupid$ethnicity = as.factor(ifelse(okcupid$ethnicity == "white", 1, ifelse(okcupid$ethnicity == "asian", 2, ifelse(okcupid$ethnicity == "hispanic / latin", 3, ifelse(okcupid$ethnicity == "black", 4, ifelse(okcupid$ethnicity == "other", NA, ifelse(okcupid$ethnicity == "pacific islander", 5, ifelse(okcupid$ethnicity == "native american", 6, ifelse(okcupid$ethnicity == "middle eastern", 7, ifelse(okcupid$ethnicity == "indian", 8, ifelse(okcupid$ethnicity == "mixed", 9, ifelse(okcupid$ethnicity == "white, other", 1, ifelse(okcupid$ethnicity == "black, white", 4, ifelse(okcupid$ethnicity == "asian, white", 2, ifelse(okcupid$ethnicity == "hispanic / latin, white", 3, ifelse(okcupid$ethnicity == "asian, pacific islander", 2, ifelse(okcupid$ethnicity == "black, other", 4, ifelse(okcupid$ethnicity == "asian, other", 2, ifelse(okcupid$ethnicity == "hispanic / latin, other", 3, ifelse(okcupid$ethnicity == "middle eastern, white", 7, ifelse(okcupid$ethnicity == "black, native american", 4, ifelse(okcupid$ethnicity == "pacific islander, white", 5, ifelse(okcupid$ethnicity == "native american, white", 6, ifelse(okcupid$ethnicity == "middle eastern, other", 7, ifelse(okcupid$ethnicity == "black, pacific islander", 4, ifelse(okcupid$ethnicity == "hispanic / latin, pacific islander", 3, ifelse(okcupid$ethnicity == "black, hispanic / latin", 4, ifelse(okcupid$ethnicity == "white, native american", 1, ifelse(okcupid$ethnicity == "asian, pacific islander, white", 2, NA)))))))))))))))))))))))))))))
+
+# other = NA, student = 1, science / tech / engineering = 2, computer / hardware / software = 2, artistic / musical / writer = 3, sales / marketing / biz dev = 4, medicine / health = 5, education / academia = 6, executive / management = 7, banking / financial / real estate = 8, entertainment / media = 9, law / legal services = 10, hospitality / travel = 11, construction / craftsmanship = 12, clerical / administrative = 13, political / government = 14, rather not say = NA, transportation = 15, unemployed = 16, retired = 17, military = 18
+okcupid$job = as.factor(ifelse(okcupid$job == "other", NA, ifelse(okcupid$job == "student", 1, ifelse(okcupid$job == "science / tech / engineering", 2, ifelse(okcupid$job == "computer / hardware / software", 2, ifelse(okcupid$job == "artistic / musical / writer", 3, ifelse(okcupid$job == "sales / marketing / biz dev", 4, ifelse(okcupid$job == "medicine / health", 5, ifelse(okcupid$job == "education / academia", 6, ifelse(okcupid$job == "executive / management", 7, ifelse(okcupid$job == "banking / financial / real estate", 8, ifelse(okcupid$job == "entertainment / media", 9, ifelse(okcupid$job == "law / legal services", 10, ifelse(okcupid$job == "hospitality / travel", 11, ifelse(okcupid$job == "construction / craftsmanship", 12, ifelse(okcupid$job == "clerical / administrative", 13, ifelse(okcupid$job == "political / government", 14, ifelse(okcupid$job == "rather not say", NA, ifelse(okcupid$job == "transportation", 15, ifelse(okcupid$job == "unemployed", 16, ifelse(okcupid$job == "retired", 17, ifelse(okcupid$job == "military", 18, NA))))))))))))))))))))))
+
+# no kids = 1, kids = 2, unknown = NA
+okcupid$offspring = as.factor(ifelse(okcupid$offspring == "doesn&rsquo;t have kids", 1, ifelse(okcupid$offspring == "doesn&rsquo;t want kids", 1, ifelse(okcupid$offspring == "doesn&rsquo;t have kids, but might want them", 1, ifelse(okcupid$offspring == "doesn&rsquo;t have kids, but wants them", 1, ifelse(okcupid$offspring == "has kids", 2, ifelse(okcupid$offspring == "has a kid", 2, ifelse(okcupid$offspring == "has kids, but doesn&rsquo;t want more", 2, ifelse(okcupid$offspring == "has a kid, but doesn&rsquo;t want more", 2, ifelse(okcupid$offspring == "has a kid, and might want more", 2, ifelse(okcupid$offspring == "wants kids", 1, ifelse(okcupid$offspring == "might want kids", 1, ifelse(okcupid$offspring == "has kids, and might want more", 2, ifelse(okcupid$offspring == "has a kid, and might want more", 2, NA))))))))))))))
+
+# straight = 1, gay = 2, bisexual = 3, unknown = NA
+okcupid$orientation = as.factor(ifelse(okcupid$orientation == "straight", 1, ifelse(okcupid$orientation == "gay", 2, ifelse(okcupid$orientation == "bisexual", 3, NA))))
+
+# likes cats and dogs = 1, likes dogs = 2, has cats = 3, has dogs = 4, has dogs and cats = 5, dislikes cats and dogs = 7, dislikes dogs = 8, dislikes cats = 9, unknown = NA, likes cats = 6
+okcupid$pets = as.factor(ifelse(okcupid$pets == "likes dogs and likes cats", 1, ifelse(okcupid$pets == "likes dogs", 2, ifelse(okcupid$pets == "likes dogs and has cats", 3, ifelse(okcupid$pets == "has dogs", 4, ifelse(okcupid$pets == "has dogs and likes cats", 4, ifelse(okcupid$pets == "has dogs and has cats", 5, ifelse(okcupid$pets == "likes dogs and dislikes cats", 2, ifelse(okcupid$pets == "has dogs and dislikes cats", 3, ifelse(okcupid$pets == "likes cats", 6, ifelse(okcupid$pets == "has cats", 3, ifelse(okcupid$pets == "has cats and likes dogs", 3, ifelse(okcupid$pets == "has cats and dislikes dogs", 3, ifelse(okcupid$pets == "dislikes dogs and dislikes cats", 7, ifelse(okcupid$pets == "dislikes dogs", 8, ifelse(okcupid$pets == "dislikes cats", 9, NA))))))))))))))))
+
+
+# Define a vector of unique religion values
+religion_values <- c(
+  "agnosticism and very serious about it",
+  "agnosticism but not too serious about it",
+  "agnosticism and somewhat serious about it",
+  "agnosticism and laughing about it",
+  "agnosticism and other",
+  "atheism and very serious about it",
+  "atheism but not too serious about it",
+  "atheism and somewhat serious about it",
+  "atheism and laughing about it",
+  "atheism and other",
+  "buddhism and very serious about it",
+  "buddhism but not too serious about it",
+  "buddhism and somewhat serious about it",
+  "buddhism and laughing about it",
+  "buddhism and other",
+  "catholicism and very serious about it",
+  "catholicism but not too serious about it",
+  "catholicism and somewhat serious about it",
+  "catholicism and laughing about it",
+  "catholicism and other",
+  "christianity and very serious about it",
+  "christianity but not too serious about it",
+  "christianity and somewhat serious about it",
+  "christianity and laughing about it",
+  "christianity and other",
+  "hinduism and very serious about it",
+  "hinduism but not too serious about it",
+  "hinduism and somewhat serious about it",
+  "hinduism and laughing about it",
+  "hinduism and other",
+  "islam and very serious about it",
+  "islam but not too serious about it",
+  "islam and somewhat serious about it",
+  "islam and laughing about it",
+  "islam and other",
+  "judaism and very serious about it",
+  "judaism but not too serious about it",
+  "judaism and somewhat serious about it",
+  "judaism and laughing about it",
+  "judaism and other",
+  "other and very serious about it",
+  "other but not too serious about it",
+  "other and somewhat serious about it",
+  "other and laughing about it",
+  "other and other",
+  "christianity",
+  "atheism",
+  "other",
+  "catholicism",
+  "buddhism",
+  "judaism",
+  "hinduism",
+  "islam"
+)
+
+# Define a vector of corresponding codes
+religion_codes <- c(1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, NA, NA, NA, NA, NA, 5, 2, NA, 4, 3, 8, 6, 7)
+
+# Recode the religion variable
+# agnosticism = 1, atheism = 2, buddhism = 3, catholicism = 4, christianity = 5, hinduism = 6, islam = 7, judaism = 8, unknown/other = NA
+okcupid$religion <- as.factor(religion_codes[match(okcupid$religion, religion_values)]); okcupid$religion
+
+# m = 1, f = 2
+okcupid$sex = as.factor(ifelse(okcupid$sex == "m", 1, 2))
+
+# gimini = 1, cancer = 2, leo = 3, virgo = 4, libra = 5, scorpio = 6, sagittarius = 7, capricorn = 8, aquarius = 9, pisces = 10, aries = 11, taurus = 12, unknown = NA
+okcupid$sign = as.factor(ifelse(okcupid$sign == "gemini", 1, ifelse(okcupid$sign == "cancer", 2, ifelse(okcupid$sign == "leo", 3, ifelse(okcupid$sign == "virgo", 4, ifelse(okcupid$sign == "libra", 5, ifelse(okcupid$sign == "scorpio", 6, ifelse(okcupid$sign == "sagittarius", 7, ifelse(okcupid$sign == "capricorn", 8, ifelse(okcupid$sign == "aquarius", 9, ifelse(okcupid$sign == "pisces", 10, ifelse(okcupid$sign == "aries", 11, ifelse(okcupid$sign == "taurus", 12, ifelse(okcupid$sign == "pisces but it doesn&rsquo;t matter", 10, ifelse(okcupid$sign == "gemini but it doesn&rsquo;t matter", 1, ifelse(okcupid$sign == "cancer but it doesn&rsquo;t matter", 2, ifelse(okcupid$sign == "virgo but it doesn&rsquo;t matter", 4, ifelse(okcupid$sign == "libra but it doesn&rsquo;t matter", 5, ifelse(okcupid$sign == "scorpio but it doesn&rsquo;t matter", 6, ifelse(okcupid$sign == "sagittarius but it doesn&rsquo;t matter", 7, ifelse(okcupid$sign == "capricorn but it doesn&rsquo;t matter", 8, ifelse(okcupid$sign == "aquarius but it doesn&rsquo;t matter", 9, ifelse(okcupid$sign == "aries but it doesn&rsquo;t matter", 11, ifelse(okcupid$sign == "taurus but it doesn&rsquo;t matter", 12, NA))))))))))))))))))))))))
+
+# no = 1, sometimes = 2, unknown = NA, when drinking = 3, yes = 4, trying to quit = 5
+okcupid$smokes = as.factor(ifelse(okcupid$smokes == "no", 1, ifelse(okcupid$smokes == "sometimes", 2, ifelse(okcupid$smokes == "when drinking", 3, ifelse(okcupid$smokes == "yes", 4, ifelse(okcupid$smokes == "trying to quit", 5, ifelse(okcupid$smokes == "unknown", NA, NA)))))))
+
+# single = 1, seeing someone = 2, married = 3, unknown = NA
+okcupid$status = as.factor(ifelse(okcupid$status == "single", 1, ifelse(okcupid$status == "available", 1, ifelse(okcupid$status == "seeing someone", 2, ifelse(okcupid$status == "married", 3, ifelse(okcupid$status == "unknown", NA, NA))))))
+
+```
+
+
+```{r - Imputation of missing values}
+
+# Use okcupid as the raw data
+okcupid2 = okcupid
+
+# pattern of missing values (% of missing values)
+# income = 81%, sign = 54%, diet = 46%, job = 27%, offspring = 61.4%, religion = 51%, pets = 34%, drugs = 24%, # ethnicity = 16%, education = 14%, body_type = 13%, smokes = 9.2%, drinks = 5.5%, status = 0.02%, 
+# height = 0.005%
+p_missing = unlist(lapply(okcupid2, function(x) sum(is.na(x))))/nrow(okcupid)
+sort(p_missing[p_missing > 0], decreasing = TRUE)
+
+# Select out variables that could cause problems in the imputation process (more than 50% missing values) 
+okcupid2 = okcupid2 %>% dplyr::select(- income, - sign, - religion, - offspring)
+
+# Run the mice code with 0 iterations
+imp = mice(okcupid2, maxit = 0)
+
+# Extract predictorMatrix and methods of imputation
+# 1 means a variable is used to predict another variable and 0 means it is not
+predM = imp$predictorMatrix
+meth = imp$method
+
+# View the first few rows of the predictor matrix
+head(predM)
+
+# Observing the methods of imputation
+meth
+
+# With this command, we tell mice to impute the okcupid2 data, create 5 datasets, use predM as the predictor matrix and don't print the imputation process
+
+imp2 = mice(okcupid2, maxit = 5, predictorMatrix = predM, method = meth, print = F)
+
+# Look ate the head and tail of imputed values for drinks
+head(imp2$imp$drinks)
+tail(imp2$imp$drinks)
+
+# Can also extract the first imputed, complete dataset and look at the first rows using the complete function
+
+okcupid = mice::complete(imp2, 5)
+head(okcupid)
+
+```
+
+
+```{r - Evaluation of the imputation}
+
+# turn factors into numerics
+
+imp2$data$body_type = as.numeric(imp2$data$body_type)
+imp2$data$diet = as.numeric(imp2$data$diet)
+imp2$data$drinks = as.numeric(imp2$data$drinks)
+imp2$data$drugs = as.numeric(imp2$data$drugs)
+imp2$data$education = as.numeric(imp2$data$education)
+imp2$data$ethnicity = as.numeric(imp2$data$ethnicity)
+imp2$data$job = as.numeric(imp2$data$job)
+imp2$data$orientation = as.numeric(imp2$data$orientation)
+imp2$data$pets = as.numeric(imp2$data$pets)
+imp2$data$sex = as.numeric(imp2$data$sex)
+imp2$data$smokes = as.numeric(imp2$data$smokes)
+imp2$data$status = as.numeric(imp2$data$status)
+
+# Height
+fit_height = with(imp2, expr = lm(height ~ age + body_type + diet + drinks + drugs + education + ethnicity + height + job + orientation + pets + sex + smokes + status)); fit_height
+pool(fit_height)
+summary(pool(fit_height))
+
+pool.r.squared(fit_height)
+
+# Body_type
+fit_body_type = with(imp2, lm(body_type ~ age + height + diet + drinks + drugs + education + ethnicity + height + job + orientation + pets + sex + smokes + status)); fit_body_type
+pool(fit_body_type)
+summary(pool(fit_body_type))
+
+pool.r.squared(fit_body_type)
+
+# diet 
+fit_diet = with(imp2, lm(diet ~ age + height + body_type + drinks + drugs + education + ethnicity + height + job + orientation + pets + sex + smokes + status)); fit_diet
+pool(fit_diet)
+summary(pool(fit_diet))
+
+pool.r.squared(fit_diet)
+
+# drinks
+fit_drinks = with(imp2, lm(drinks ~ age + height + body_type + diet + drugs + education + ethnicity + height + job + orientation + pets + sex + smokes + status)); fit_drinks
+pool(fit_drinks)
+summary(pool(fit_drinks))
+
+pool.r.squared(fit_drinks)
+
+# ethnicity 
+fit_ethnicity = with(imp2, lm(ethnicity ~ age + height + body_type + diet + drugs + education + drinks + height + job + orientation + pets + sex + smokes + status)); fit_ethnicity
+pool(fit_ethnicity)
+summary(pool(fit_ethnicity))
+
+pool.r.squared(fit_ethnicity)
+
+# job
+fit_job = with(imp2, lm(job ~ age + height + body_type + diet + drugs + education + drinks + height + ethnicity + orientation + pets + sex + smokes + status)); fit_job
+pool(fit_job)
+summary(pool(fit_job))
+
+pool.r.squared(fit_job)
+
+# pets
+fit_pets = with(imp2, lm(pets ~ age + height + body_type + diet + drugs + education + drinks + height + ethnicity + orientation + job + sex + smokes + status)); fit_pets
+pool(fit_pets)
+summary(pool(fit_pets))
+
+pool.r.squared(fit_pets)
+
+# smokes
+fit_smokes = with(imp2, lm(smokes ~ age + height + body_type + diet + drugs + education + drinks + height + ethnicity + orientation + job + sex + pets + status)); fit_smokes
+pool(fit_smokes)
+summary(pool(fit_smokes))
+
+pool.r.squared(fit_smokes)
+
+# status
+fit_status = with(imp2, lm(status ~ age + height + body_type + diet + drugs + education + drinks + height + ethnicity + orientation + job + sex + pets + smokes)); fit_status
+pool(fit_status)
+summary(pool(fit_status))
+
+pool.r.squared(fit_status)
+
+# education
+fit_education = with(imp2, lm(education ~ age + height + body_type + diet + drugs + status + drinks + height + ethnicity + orientation + job + sex + pets + smokes)); fit_education
+pool(fit_education)
+summary(pool(fit_education))
+
+pool.r.squared(fit_education)
+
+
+
+```
+
+
+
+```{r - Data Exploration}
+
+# Summary of the data set 
+summary(okcupid)
+skim(okcupid)
+
+# Visualize demographic distributions
+
+corDegrade <- colorRampPalette(c("darkblue","violet"))
+
+# histograms for continuous variables 
+hist(okcupid$age, main = "Age Distribution", xlab = "Age", col = corDegrade(11), breaks = 20)
+hist(okcupid$height, main = "Height Distribution", xlab = "Height", col = corDegrade(5), breaks = 20)
+
+# density plots for continous distributions
+ggplot(okcupid, aes(x = age)) +
+  geom_density(fill = "magenta") +
+  labs(title = "Age Density Plot", x = "Age", y = "Density")
+
+ggplot(okcupid, aes(x = height)) + 
+  geom_density(fill = "magenta") +
+  labs(title = "Height Density Plot", x = "Height", y = "Density")
+
+# bar plots for categorical variables 
+
+# bar plot for body type
+ggplot(okcupid, aes(x = body_type)) +
+  geom_bar(fill = corDegrade(7)) +
+  labs(title = "Body Type Distribution", x = "Body Type", y = "Count")
+
+# bar plot for diet
+ggplot(okcupid, aes(x = diet)) +
+  geom_bar(fill = corDegrade(3)) +
+  labs(title = "Diet Distribution", x = "Diet", y = "Count")
+
+# bar plot for drinks
+ggplot(okcupid, aes(x = drinks)) +
+  geom_bar(fill = corDegrade(5)) +
+  labs(title = "Drinks Distribution", x = "Drinks", y = "Count")
+
+# bar plot for drugs
+ggplot(okcupid, aes(x = drugs)) +
+  geom_bar(fill = corDegrade(3)) +
+  labs(title = "Drugs Distribution", x = "Drugs", y = "Count")
+
+# bar plot for education
+ggplot(okcupid, aes(x = education)) +
+  geom_bar(fill = corDegrade(4)) +
+  labs(title = "Education Distribution", x = "Education", y = "Count")
+
+# bar plot for ethnicity
+ggplot(okcupid, aes(x = ethnicity)) + 
+  geom_bar(fill = corDegrade(8)) + 
+  labs(title = "Ethnicity Distribution", x = "Ethnicity", y = "Count")
+
+# bar plot for job
+ggplot(okcupid, aes(x = job)) +
+  geom_bar(fill = corDegrade(18)) +
+  labs(title = "Job Distribution", x = "Job", y = "Count")
+
+# bar plot for orientation
+ggplot(okcupid, aes(x = orientation)) +
+  geom_bar(fill = corDegrade(3)) +
+  labs(title = "Sexual Orientation Distribution", x = "Sexual Orientation", y = "Count")
+  
+# bar plot for pets 
+ggplot(okcupid, aes(x = pets)) +
+  geom_bar(fill = corDegrade(9)) +
+  labs(title = "Pets Distribution", x = "Pets", y = "Count")
+
+# bar plot for sex 
+ggplot(okcupid, aes(x = sex)) +
+  geom_bar(fill = c("darkblue", "violet")) +
+  labs(title = "Sex Distribution", x = "Sex", y = "Count")
+
+# bar plot for smokes
+ggplot(okcupid, aes(x = smokes)) +
+  geom_bar(fill = corDegrade(5)) +
+  labs(title = "Smoking Distribution", x = "Smoking", y = "Count")
+
+# bar plot for statuts 
+ggplot(okcupid, aes(x = status)) +
+  geom_bar(fill = corDegrade(3)) +
+  labs(title = "Status Distribution", x = "Status", y = "Count")
+
+```
+
+
+```{r - Creating Social engagement index}
+
+# Diet
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$diet[i] == 1) {
+    okcupid$social_engagement[i] = 2
+  }
+  else if (okcupid$diet[i] == 2) {
+    okcupid$social_engagement[i] = 3
+  }
+  else if (okcupid$diet[i] == 3) {
+    okcupid$social_engagement[i] = 5
+  }
+  
+}
+
+# Drinks
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$drinks[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else if (okcupid$drinks[i] == 2) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$drinks[i] == 3) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$drinks[i] == 4) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$drinks[i] == 5) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+}
+
+# Drugs
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$drugs[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$drugs[i] == 2){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$drugs[i] == 3) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+}
+
+# Education
+
+for (i in 1:nrow(okcupid)) {
+  
+  if (okcupid$education[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$education[i] == 2){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$education[i] == 3) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$education[i] == 4) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+}
+
+# Ethinicty
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$ethnicity[i] == 1) {
+    okcupid$social_engagement [i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$ethnicity[i] == 2){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  } 
+  else if (okcupid$ethnicity[i] == 3){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$ethnicity[i] == 4){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$ethnicity[i] == 5) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$ethnicity[i] == 6) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$ethnicity[i] == 7) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else if (okcupid$ethnicity[i] == 8) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$ethnicity[i] == 9){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+}
+
+# Job 
+
+for (i in 1:nrow(okcupid)) {
+  
+  if (okcupid$job[i] == 1) {
+    okcupid$social_engagement [i] = okcupid$social_engagement[i] + 4
+  }
+  
+  else if (okcupid$job[i] == 2) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  
+  else if (okcupid$job[i] == 3) {
+    okcupid$social_engagement[i] = okcupid$social_engagement [i] + 5
+  }
+  
+  else if (okcupid$job[i] == 4) {
+    okcupid$social_engagement[i] = okcupid$social_engagement [i] + 4
+  }
+  else if (okcupid$job [i] == 5) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  
+  else if (okcupid$job[i] == 6) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  
+  else if (okcupid$job [i] == 7) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  
+  else if (okcupid$job [i] == 8){
+    okcupid$social_engagement [i] = okcupid$social_engagement[i] + 3
+  }
+  
+  else if (okcupid$job[i] == 9) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  
+  else if (okcupid$job[i] == 10) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  
+  else if (okcupid$job[i] == 11) {
+    okcupid$social_engagement [i]= okcupid$social_engagement [i] + 5
+  }
+  
+  else if (okcupid$job[i] == 12){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  
+  else if (okcupid$job[i] == 13) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$job[i] == 14) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$job[i] == 15) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else if (okcupid$job[i] == 16) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$job[i] == 17) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else if (okcupid$job[i] == 18){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+}
+
+# Age
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$age[i] <= 24) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$age[i] <= 34) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$age[i] <=44) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$age[i] <= 54) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$age[i] <= 64) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$age[i] <= 74) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else if (okcupid$age[i] <= 84) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+  else {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 1
+  }
+}
+
+# Orientation
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$orientation[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$orientation[i] == 2) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$orientation[i] == 3){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+}
+
+# Pets
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$pets[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$pets[i] == 2){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$pets[i] == 3){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$pets[i] == 4){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$pets[i] == 5){
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$pets[i] == 6) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$pets[i] == 7) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+  else if (okcupid$pets[i] == 8) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+}
+
+# Sex
+
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$sex[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+}
+
+# Smokes
+for (i in 1:nrow(okcupid)) {
+  if (okcupid$smokes[i] == 1) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$smokes[i] == 2) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 3
+  }
+  else if (okcupid$smokes[i] == 3) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 4
+  }
+  else if (okcupid$smokes[i] == 4) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 5
+  }
+  else if (okcupid$smokes[i] == 5) {
+    okcupid$social_engagement[i] = okcupid$social_engagement[i] + 2
+  }
+}
+
+okcupid$social_engagement = round(okcupid$social_engagement/11)
+okcupid$social_engagement
+
+# Bar plot of the social engagement column
+ggplot(okcupid, aes(x = social_engagement)) +
+  geom_bar(fill = corDegrade(4)) +
+  labs(title = "Social Engagement Distribution", x = "Social Engagement", y = "Count")
+
+
+```
+
+```{r - Normalizing the data}
+
+set.seed(2003)
+train.index = sample(c(1:dim(okcupid)[1]), dim(okcupid)[1]*0.6)  
+training_data = okcupid[train.index, ]
+validation_data = okcupid[-train.index, ]
+
+train_norm = training_data
+valid_norm = validation_data
+okcupid.norm = okcupid
+
+norm_values = preProcess(training_data[, 1:14], method=c("center", "scale")); norm_values
+train_norm[, 1:14] = predict(norm_values, training_data[, 1:14]); train_norm
+valid_norm[, 1:14] = predict(norm_values, validation_data[, 1:14]); valid_norm
+okcupid.norm[, 1:14] = predict(norm_values, okcupid[, 1:14]); okcupid.norm
+
+```
+
+
+```{r - Correlation}
+
+# turning factors into numerics to be able to do the correlation
+okcupid.norm$body_type = as.numeric(okcupid.norm$body_type)
+okcupid.norm$diet = as.numeric(okcupid.norm$diet)
+okcupid.norm$drinks = as.numeric(okcupid.norm$drinks)
+okcupid.norm$drugs = as.numeric(okcupid.norm$drugs)
+okcupid.norm$education = as.numeric(okcupid.norm$education)
+okcupid.norm$ethnicity = as.numeric(okcupid.norm$ethnicity)
+okcupid.norm$job = as.numeric(okcupid.norm$job)
+okcupid.norm$orientation = as.numeric(okcupid.norm$orientation)
+okcupid.norm$pets = as.numeric(okcupid.norm$pets)
+okcupid.norm$sex = as.numeric(okcupid.norm$sex)
+okcupid.norm$smokes = as.numeric(okcupid.norm$smokes)
+okcupid.norm$status = as.numeric(okcupid.norm$status)
+
+# Correlation Matrix
+res = cor(okcupid.norm)
+round(res, 2)
+corDegrade <- colorRampPalette(c("darkblue","violet"))
+corrplot(cor(okcupid.norm), method = "color", col = corDegrade(10), tl.col = "darkblue", type = "lower") 
+
+```
+
+```{r - k-NN Model}
+
+k_values = c(1, 2, 3, 4, 5)
+rmse_values = data.frame(k = numeric(), rmse = numeric())
+
+library(Metrics)
+
+for (i in seq_along(k_values)) {
+  k = k_values[i]
+  prediction = as.data.frame(class::knn(train = train_norm[, c(1, 3:7, 9:13)], test = valid_norm[, c(1, 3:7, 9:13)], cl = train_norm[, 15], k = k))
+  error = valid_norm[, 15] - as.numeric(as.character(prediction[, 1]))
+  error_squared = error^2
+  rmse = sqrt(mean(error_squared))
+  rmse_values = rbind(rmse_values, data.frame(k = k, rmse = rmse))
+}
+
+rmse_values
+
+plot(rmse_values$k, rmse_values$rmse, type = "o", col = "magenta", xlab = "k", ylab = "RMSE", main = "RMSE vs k")
+
+knn3 = class::knn(train = train_norm[, c(1, 3:7, 9:13)], test = valid_norm[, c(1, 3:7, 9:13)], cl = train_norm[, 15], k = 3)
+
+```
+
+```{r - Model Evaluation}
+# Model evaluation 
+
+predictions = as.data.frame(class::knn(train = train_norm[, c(1, 3:7, 9:13)], test = train_norm[, c(1, 3:7, 9:13)], cl = train_norm[, 15], k = 3))
+confusion_matrix = table(as.numeric(as.character(predictions[, 1])), train_norm[, 15])
+confusion_matrix
+
+# Calculating Accuracy 
+
+accuracy = sum(diag(confusion_matrix)) / sum(confusion_matrix)
+accuracy
+
+# Precision, Recall and F1-score
+
+precision = diag(confusion_matrix) / rowSums(confusion_matrix)
+mean(precision)
+recall = diag(confusion_matrix) / colSums(confusion_matrix)
+mean(recall)
+f1_score = 2 * (precision * recall) / (precision + recall)
+mean(f1_score)
+
+```
+
+
+```{r - Prediction}
+
+#k = 3
+
+norm_values2 = preProcess(training_data[, c(1, 3:4, 6:7, 9:13)], method=c("center", "scale")); norm_values2
+
+# Nora
+Nora = data.frame(orientation = 3, drinks = 2, smokes = 2, sex = 2, job = 1, ethnicity = 3, age = 23, education = 1, pets = 3, diet = 3); Nora
+Nora_norm = predict(norm_values2, Nora); Nora_norm
+
+kNN_pred_Nora = class::knn(train = okcupid.norm[, c(1, 3:4, 6:7, 9:13)], test = Nora_norm, cl = okcupid.norm[, 15], k = 3); kNN_pred_Nora
+
+# Greg
+Greg = data.frame(orientation = 2, drinks = 2, smokes = 4, sex = 1, job = 4, ethnicity = 1, age = 32, education = 1, pets = 5, diet = 1); Greg
+Greg_norm = predict(norm_values2, Greg); Greg_norm
+
+kNN_pred_Greg = class::knn(train = okcupid.norm[, c(1, 3:4, 6:7, 9:13)], test = Greg_norm, cl = okcupid.norm[, 15], k = 3); kNN_pred_Greg
+
+# Augusta
+Augusta = data.frame(orientation = 3, drinks = 2, smokes = 2, sex = 2, job = 1, ethnicity = 3, age = 23, education = 1, pets = 3, diet = 3); Augusta
+Augusta_norm = predict(norm_values2, Augusta); Augusta_norm
+
+kNN_pred_Augusta = class::knn(train = okcupid.norm[, c(1, 3:4, 6:7, 9:13)], test = Augusta_norm, cl = okcupid.norm[, 15], k = 3); kNN_pred_Augusta
+
+
+```
+
+
+
+          
+          
+
+
+
+
+
+
+
+
